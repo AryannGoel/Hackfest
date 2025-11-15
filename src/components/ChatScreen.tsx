@@ -1,21 +1,17 @@
-import React, { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
-import { MessageSquare, Heart, HelpCircle, ArrowLeft, Image, Home, Mic, Send, WifiOff, RotateCcw, CheckCircle2 } from "lucide-react";
+import { MessageSquare, Heart, HelpCircle, ArrowLeft, Image, Home, Mic, Send, Zap } from "lucide-react";
 import agoraAIRestService from "../services/agoraAIRestService";
+import geminiService from "../services/geminiService";
 
-type AgoraResponse = { text: string };
+type AIProvider = "agora" | "gemini";
 
 interface Message {
   id: string;
   sender: "user" | "ai";
   text: string;
   timestamp: Date;
-  error?: boolean;
-  tokenUsage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
+  provider?: AIProvider;
 }
 
 export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welcome" | "chat" | "coping" | "support" | "voice") => void }) {
@@ -29,8 +25,8 @@ export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welco
   ]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState<boolean | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "disconnected">("checking");
+  const [aiProvider, setAiProvider] = useState<AIProvider>("gemini");
+  const [showProviderMenu, setShowProviderMenu] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -40,17 +36,6 @@ export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welco
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
-  // Check Agora AI connection status on mount
-  useEffect(() => {
-    const checkConnection = async () => {
-      setConnectionStatus("checking");
-      const configured = agoraAIRestService.isConfigured();
-      setIsConnected(configured);
-      setConnectionStatus(configured ? "connected" : "disconnected");
-    };
-    checkConnection();
-  }, []);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,79 +55,44 @@ export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welco
     setIsLoading(true);
 
     try {
-      // Update connection status
-      setConnectionStatus("checking");
+      let aiResponse;
       
-      // Call Agora AI REST Service
-      const aiResponse = await agoraAIRestService.sendMessage(inputValue);
+      // Select AI provider
+      if (aiProvider === "gemini") {
+        if (!geminiService.isConfigured()) {
+          throw new Error("Gemini API key not configured. Set VITE_GEMINI_API_KEY in .env.local");
+        }
+        aiResponse = await geminiService.sendMessage(inputValue);
+      } else {
+        aiResponse = await agoraAIRestService.sendMessage(inputValue);
+      }
 
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
         text: aiResponse.text,
         timestamp: new Date(),
-        tokenUsage: aiResponse.tokenUsage,
+        provider: aiProvider,
       };
 
       setMessages(prev => [...prev, aiMessage]);
-      setConnectionStatus("connected");
-      setIsConnected(true);
     } catch (error) {
-      console.error("Error calling Agora AI:", error);
-      setConnectionStatus("disconnected");
-      setIsConnected(false);
+      console.error("Error calling AI service:", error);
       
-      // Show user-friendly error message
-      let errorText = "Sorry, I encountered a technical issue. Please try again.";
-      
-      if (error instanceof Error) {
-        const errorMsg = error.message;
-        
-        // Handle specific error types with better messages
-        if (errorMsg.includes("quota") || errorMsg.includes("429")) {
-          errorText = `⚠️ OpenAI API Quota Exceeded\n\nYour OpenAI account has run out of credits or billing is not set up.\n\nTo fix this:\n1. Check your usage: https://platform.openai.com/usage\n2. Add payment method: https://platform.openai.com/account/billing\n3. Upgrade your plan if needed\n\nOnce billing is set up, the chat will work again!`;
-        } else if (errorMsg.includes("401") || errorMsg.includes("authentication")) {
-          errorText = `🔑 Authentication Error\n\nYour OpenAI API key is invalid or missing.\n\nPlease check:\n1. Your .env.local file has VITE_OPENAI_API_KEY set\n2. The API key is correct\n3. Restart your dev server after changing .env.local`;
-        } else if (errorMsg.includes("endpoint") || errorMsg.includes("404")) {
-          errorText = `🔗 Endpoint Not Found\n\n${errorMsg}\n\nPlease check your VITE_AGORA_AI_API_BASE_URL in .env.local`;
-        } else {
-          errorText = `Sorry, I encountered an issue: ${errorMsg}`;
-        }
-      }
-      
+      // Show actual error to user for transparency
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
-        text: errorText,
+        text: error instanceof Error 
+          ? `Sorry, I encountered an issue: ${error.message}. Please check your connection and credentials.`
+          : "Sorry, I encountered a technical issue. Please try again.",
         timestamp: new Date(),
-        error: true,
       };
 
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleClearConversation = () => {
-    if (window.confirm("Are you sure you want to clear the conversation history?")) {
-      agoraAIRestService.clearHistory();
-      setMessages([
-        {
-          id: "1",
-          sender: "ai",
-          text: "Hi there, I'm MindBloom. I'm here to listen and help you navigate through any emotional distress you might be experiencing. How are you feeling today?",
-          timestamp: new Date(),
-        }
-      ]);
-    }
-  };
-
-  const handleRetryConnection = async () => {
-    setConnectionStatus("checking");
-    const configured = agoraAIRestService.isConfigured();
-    setIsConnected(configured);
-    setConnectionStatus(configured ? "connected" : "disconnected");
   };
 
   return (
@@ -154,43 +104,50 @@ export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welco
           className="p-2 hover:bg-[#2d5045] rounded-lg transition-colors">
           <ArrowLeft className="w-6 h-6" />
         </button>
-        <div className="flex-1 flex flex-col items-center gap-1">
-          <h1 className="text-center">MindBloom Chat</h1>
-          <div className="flex items-center gap-2 text-xs">
-            {connectionStatus === "checking" && (
-              <div className="flex items-center gap-1 text-gray-400">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" />
-                <span>Checking connection...</span>
-              </div>
-            )}
-            {connectionStatus === "connected" && (
-              <div className="flex items-center gap-1 text-green-400">
-                <CheckCircle2 className="w-3 h-3" />
-                <span>Agora AI Connected</span>
-              </div>
-            )}
-            {connectionStatus === "disconnected" && (
-              <div className="flex items-center gap-1 text-red-400">
-                <WifiOff className="w-3 h-3" />
-                <span>Not Connected</span>
-                <button
-                  onClick={handleRetryConnection}
-                  className="ml-2 p-1 hover:bg-[#2d5045] rounded transition-colors"
-                  title="Retry connection"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </div>
-            )}
-          </div>
+        <h1 className="flex-1 text-center">MindBloom Chat</h1>
+        
+        {/* AI Provider Selector */}
+        <div className="relative">
+          <button 
+            onClick={() => setShowProviderMenu(!showProviderMenu)}
+            className="p-2 hover:bg-[#2d5045] rounded-lg transition-colors flex items-center gap-2"
+            title={`Using ${aiProvider === 'gemini' ? 'Google Gemini' : 'Agora AI'}`}
+          >
+            <Zap className="w-5 h-5 text-[#3dd9b8]" />
+            <span className="text-xs font-semibold">{aiProvider === 'gemini' ? 'Gemini' : 'Agora'}</span>
+          </button>
+          
+          {showProviderMenu && (
+            <div className="absolute top-full right-0 mt-2 bg-[#0f241e] border border-[#2d5045] rounded-lg shadow-lg z-10">
+              <button
+                onClick={() => {
+                  setAiProvider("gemini");
+                  setShowProviderMenu(false);
+                }}
+                className={`w-full px-4 py-2 text-left text-sm transition-colors ${
+                  aiProvider === "gemini" 
+                    ? "bg-[#3dd9b8] text-[#12211c] font-semibold" 
+                    : "hover:bg-[#2d5045] text-gray-300"
+                }`}
+              >
+                🔷 Google Gemini
+              </button>
+              <button
+                onClick={() => {
+                  setAiProvider("agora");
+                  setShowProviderMenu(false);
+                }}
+                className={`w-full px-4 py-2 text-left text-sm transition-colors ${
+                  aiProvider === "agora" 
+                    ? "bg-[#3dd9b8] text-[#12211c] font-semibold" 
+                    : "hover:bg-[#2d5045] text-gray-300"
+                }`}
+              >
+                🟢 Agora AI
+              </button>
+            </div>
+          )}
         </div>
-        <button
-          onClick={handleClearConversation}
-          className="p-2 hover:bg-[#2d5045] rounded-lg transition-colors"
-          title="Clear conversation"
-        >
-          <RotateCcw className="w-5 h-5" />
-        </button>
       </header>
 
       {/* Chat Area */}
@@ -217,18 +174,11 @@ export default function ChatScreen({ onNavigate }: { onNavigate: (screen: "welco
                 <div
                   className={`rounded-2xl p-4 max-w-xs md:max-w-md lg:max-w-lg ${
                     message.sender === "ai"
-                      ? message.error
-                        ? "bg-red-900/30 border border-red-500/50 rounded-tl-sm"
-                        : "bg-[#4a7565] rounded-tl-sm"
+                      ? "bg-[#4a7565] rounded-tl-sm"
                       : "bg-[#3dd9b8] rounded-br-sm text-[#12211c]"
                   }`}
                 >
-                  <p className={message.error ? "text-red-200" : ""}>{message.text}</p>
-                  {message.tokenUsage && message.sender === "ai" && (
-                    <div className="mt-2 pt-2 border-t border-gray-600/50 text-xs text-gray-400">
-                      Tokens: {message.tokenUsage.totalTokens} (prompt: {message.tokenUsage.promptTokens}, completion: {message.tokenUsage.completionTokens})
-                    </div>
-                  )}
+                  <p>{message.text}</p>
                 </div>
               </div>
             </div>

@@ -1,12 +1,17 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { Home, Mic, Phone, AlertCircle, MessageSquare, Heart, HelpCircle } from 'lucide-react';
+import { Home, Mic, Phone, AlertCircle, MessageSquare, Heart, HelpCircle, Zap } from 'lucide-react';
 import voiceService from '../services/voiceService';
+import agoraAIRestService from '../services/agoraAIRestService';
+import geminiService from '../services/geminiService';
+
+type VoiceAIProvider = "agora" | "gemini" | "fallback";
 
 interface VoiceMessage {
   id: string;
   sender: "user" | "ai";
   text: string;
   timestamp: Date;
+  provider?: VoiceAIProvider;
 }
 
 export default function VoiceChatScreen({ onNavigate }: { onNavigate: (screen: "welcome" | "chat" | "coping" | "support" | "voice") => void }) {
@@ -15,6 +20,8 @@ export default function VoiceChatScreen({ onNavigate }: { onNavigate: (screen: "
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [sessionDuration, setSessionDuration] = useState(0);
   const [transcript, setTranscript] = useState("");
+  const [voiceProvider, setVoiceProvider] = useState<VoiceAIProvider>("gemini");
+  const [showProviderMenu, setShowProviderMenu] = useState(false);
   const [messages, setMessages] = useState<VoiceMessage[]>([
     {
       id: "1",
@@ -93,14 +100,65 @@ export default function VoiceChatScreen({ onNavigate }: { onNavigate: (screen: "
     setIsProcessing(true);
 
     try {
-      // Use local contextual AI to generate response
-      const aiResponseText = getContextualResponse(userInput);
+      let aiResponseText = "";
+      let provider: VoiceAIProvider = voiceProvider;
+
+      // Try to get AI response based on selected provider
+      if (voiceProvider === "gemini") {
+        try {
+          if (geminiService.isConfigured()) {
+            const response = await geminiService.sendMessage(userInput);
+            aiResponseText = response.text;
+            console.log("✅ Got Gemini voice response");
+          } else {
+            throw new Error("Gemini not configured");
+          }
+        } catch (error) {
+          console.warn("⚠️ Gemini failed, trying Agora:", error);
+          try {
+            const response = await agoraAIRestService.sendMessage(userInput);
+            aiResponseText = response.text;
+            provider = "agora";
+            console.log("✅ Got Agora voice response (fallback)");
+          } catch (agoraError) {
+            console.warn("⚠️ Agora also failed, using fallback");
+            aiResponseText = getContextualResponse(userInput);
+            provider = "fallback";
+          }
+        }
+      } else if (voiceProvider === "agora") {
+        try {
+          const response = await agoraAIRestService.sendMessage(userInput);
+          aiResponseText = response.text;
+          console.log("✅ Got Agora voice response");
+        } catch (error) {
+          console.warn("⚠️ Agora failed, trying Gemini:", error);
+          try {
+            if (geminiService.isConfigured()) {
+              const response = await geminiService.sendMessage(userInput);
+              aiResponseText = response.text;
+              provider = "gemini";
+              console.log("✅ Got Gemini voice response (fallback)");
+            } else {
+              throw new Error("Gemini not configured");
+            }
+          } catch (geminiError) {
+            console.warn("⚠️ Gemini also failed, using fallback");
+            aiResponseText = getContextualResponse(userInput);
+            provider = "fallback";
+          }
+        }
+      } else {
+        // Fallback provider - use contextual response
+        aiResponseText = getContextualResponse(userInput);
+      }
 
       const aiMessage: VoiceMessage = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
         text: aiResponseText,
         timestamp: new Date(),
+        provider,
       };
 
       setMessages(prev => [...prev, aiMessage]);
@@ -122,6 +180,7 @@ export default function VoiceChatScreen({ onNavigate }: { onNavigate: (screen: "
         sender: "ai",
         text: errorText,
         timestamp: new Date(),
+        provider: "fallback",
       };
 
       setMessages(prev => [...prev, errorMessage]);
@@ -187,9 +246,70 @@ export default function VoiceChatScreen({ onNavigate }: { onNavigate: (screen: "
             </p>
           </div>
         </div>
-        <button onClick={() => onNavigate('support')} className='p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg'>
-          <AlertCircle className='w-5 h-5 text-red-400' />
-        </button>
+
+        {/* Provider Selector */}
+        <div className='flex items-center gap-2'>
+          <div className='relative'>
+            <button 
+              onClick={() => setShowProviderMenu(!showProviderMenu)}
+              className='p-2 hover:bg-[#2d5045] rounded-lg transition-colors flex items-center gap-1'
+              title={`Using ${voiceProvider === 'gemini' ? 'Google Gemini' : voiceProvider === 'agora' ? 'Agora AI' : 'Fallback'}`}
+            >
+              <Zap className='w-5 h-5 text-[#3dd9b8]' />
+              <span className='text-xs font-semibold hidden sm:inline'>
+                {voiceProvider === 'gemini' ? 'Gemini' : voiceProvider === 'agora' ? 'Agora' : 'Fallback'}
+              </span>
+            </button>
+            
+            {showProviderMenu && (
+              <div className='absolute top-full right-0 mt-2 bg-[#0f241e] border border-[#2d5045] rounded-lg shadow-lg z-10'>
+                <button
+                  onClick={() => {
+                    setVoiceProvider("gemini");
+                    setShowProviderMenu(false);
+                  }}
+                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
+                    voiceProvider === "gemini" 
+                      ? "bg-[#3dd9b8] text-[#12211c] font-semibold" 
+                      : "hover:bg-[#2d5045] text-gray-300"
+                  }`}
+                >
+                  🔷 Google Gemini
+                </button>
+                <button
+                  onClick={() => {
+                    setVoiceProvider("agora");
+                    setShowProviderMenu(false);
+                  }}
+                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
+                    voiceProvider === "agora" 
+                      ? "bg-[#3dd9b8] text-[#12211c] font-semibold" 
+                      : "hover:bg-[#2d5045] text-gray-300"
+                  }`}
+                >
+                  🟢 Agora AI
+                </button>
+                <button
+                  onClick={() => {
+                    setVoiceProvider("fallback");
+                    setShowProviderMenu(false);
+                  }}
+                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
+                    voiceProvider === "fallback" 
+                      ? "bg-[#3dd9b8] text-[#12211c] font-semibold" 
+                      : "hover:bg-[#2d5045] text-gray-300"
+                  }`}
+                >
+                  📋 Fallback
+                </button>
+              </div>
+            )}
+          </div>
+
+          <button onClick={() => onNavigate('support')} className='p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg'>
+            <AlertCircle className='w-5 h-5 text-red-400' />
+          </button>
+        </div>
       </header>
 
       {/* Messages Area */}
