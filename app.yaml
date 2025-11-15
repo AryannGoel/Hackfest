@@ -1,0 +1,20 @@
+runtime: nodejs20
+
+env: standard
+
+entrypoint: npm start
+
+env_variables:
+  VITE_GEMINI_API_KEY: ${VITE_GEMINI_API_KEY}
+  VITE_AGORA_AI_REST_KEY: ${VITE_AGORA_AI_REST_KEY}
+  VITE_AGORA_AI_REST_SECRET: ${VITE_AGORA_AI_REST_SECRET}
+  VITE_AGORA_APP_ID: ${VITE_AGORA_APP_ID}
+  VITE_AGORA_PROJECT_ID: ${VITE_AGORA_PROJECT_ID}
+
+handlers:
+  - url: /.*
+    static_files: build/index.html
+    upload: build/index.html
+  - url: /(.*)
+    static_files: build/\1
+    upload: build/(.*)
